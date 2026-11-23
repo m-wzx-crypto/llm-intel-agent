@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.llmintel.agent.weekly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/LLMIntelAgent.app/Contents/MacOS/LLMIntelAgent</string>
+    <string>--run-daily</string>
+    <string>--slot</string>
+    <string>weekly</string>
+  </array>
+  <!-- 每周一 9:00 生成「上一周」的按公司摘要；机器没开则唤醒后补跑（脚本内幂等，已有就跳过） -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key><integer>1</integer>
+    <key>Hour</key><integer>9</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/tmp/llmintel.weekly.out</string>
+  <key>StandardErrorPath</key><string>/tmp/llmintel.weekly.err</string>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>ThrottleInterval</key><integer>600</integer>
+</dict>
+</plist>

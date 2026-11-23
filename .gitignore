@@ -1,0 +1,38 @@
+# 运行时与构建产物
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/dist/
+build/build/
+build/app/
+build/pyi/
+build/backup/
+build/vendor/
+dist/
+
+# 本地数据与缓存（绝不入库）
+data/
+wxfeeds/
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.tmp
+
+# 凭据与账号信息
+cookies.json
+accounts.json
+config.json
+*.pem
+*.key
+*.p12
+.env
+.env.*
+
+# 工具与系统文件
+.DS_Store
+.workbuddy/
+.trae/
+.idea/
+.vscode/
