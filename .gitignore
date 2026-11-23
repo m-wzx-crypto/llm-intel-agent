@@ -30,6 +30,21 @@ config.json
 .env
 .env.*
 
+# 内部文档（含部署主机、进度与账号清单）
+docs/部署方案_*.md
+docs/更新通道_*.md
+docs/实现进度_*.md
+docs/公众号接入清单_*.md
+docs/评审说明_*.md
+docs/前端设计调研_*.md
+
+# 打包脚本与截图（含签名主体、上传主机、真实数据）
+build/build-release.sh
+build/build-release.sh.bak*
+build/LLMIntelAgent.spec
+.screenshots/
+*.bak*
+
 # 工具与系统文件
 .DS_Store
 .workbuddy/
