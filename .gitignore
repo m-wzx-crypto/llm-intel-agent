@@ -37,6 +37,9 @@ docs/实现进度_*.md
 docs/公众号接入清单_*.md
 docs/评审说明_*.md
 docs/前端设计调研_*.md
+docs/refs/
+docs/技术方案_v0.1.md
+docs/桑基选型_*.md
 
 # 打包脚本与截图（含签名主体、上传主机、真实数据）
 build/build-release.sh
