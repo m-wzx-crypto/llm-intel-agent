@@ -402,9 +402,10 @@ def collect(limit_per_kw: int | None = None, keywords=None,
 def collect_state() -> dict:
     c = read_cache()
     plan = keyword_plan()
+    words = _panel_words()
     counts = {p: 0 for p in PANEL_LABEL}
     for r in (c.get("comments") or []):
-        p = r.get("panel") or panel_for_text(f"{r.get('note_title','')} {r.get('text','')}")
+        p = r.get("panel") or panel_for_text(f"{r.get('note_title','')} {r.get('text','')}", words)
         if p in counts:
             counts[p] += 1
     return {"running": _COLLECT["running"], "msg": _COLLECT["msg"],

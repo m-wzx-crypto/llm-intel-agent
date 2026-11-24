@@ -155,6 +155,20 @@
   .mbody{padding:14px 20px;overflow:auto}
   .mfoot{display:flex;align-items:center;gap:10px;padding:12px 20px;border-top:1px solid #f1f4f9;
          background:#fbfcfe}
+  /* 早报弹窗 */
+  .brief-hd{display:flex;gap:14px;flex-wrap:wrap;align-items:baseline;margin-bottom:10px}
+  .brief-hd b{font-size:13px}
+  .brief-hd span{font-size:11px;color:var(--ink3)}
+  .bsec{margin:14px 0 4px}
+  .bsec h4{margin:0 0 5px;font-size:12px;font-weight:700;color:var(--ink2);
+           display:flex;gap:7px;align-items:center}
+  .bsec h4 i{width:6px;height:6px;border-radius:2px;background:var(--brand);flex:none}
+  .bitem{padding:8px 0;border-bottom:1px dashed var(--line2)}
+  .bitem:last-child{border-bottom:0}
+  .bitem a{color:var(--ink);text-decoration:none;font-weight:600;font-size:12.5px;line-height:1.45}
+  .bitem a:hover{color:var(--brand)}
+  .bitem p{margin:3px 0 0;font-size:12px;color:var(--ink2);line-height:1.55}
+  .bitem .bm{font-size:10.5px;color:var(--ink3);margin-top:3px}
   .ubar{height:6px;background:#eef2f8;border-radius:99px;overflow:hidden}
   .ubar i{display:block;height:100%;background:linear-gradient(90deg,#4f46e5,#818cf8);transition:width .3s}
   .ubar.warn i{background:linear-gradient(90deg,#f59e0b,#fbbf24)}
@@ -494,6 +508,8 @@
         <button data-days="90" class="on">90天</button>
       </div>
       <div style="flex:1"></div>
+      <button class="ico" id="btn-brief" title="今日早报">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 5h12v14H6a2 2 0 0 1-2-2z"/><path d="M16 8h4v9a2 2 0 0 1-2 2"/><path d="M7 9h6M7 12h6M7 15h4"/></svg></button>
       <button class="ico" id="btn-export2" title="导出 digest.json">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16"/></svg></button>
       <button class="ico" id="btn-run2" title="立即采集">
@@ -905,6 +921,17 @@ https://mp.weixin.qq.com/s/xxxxxxxx"
     <div class="mhead"><h2>接入小红书评论区</h2><div class="sp"></div>
       <button class="btn gh" id="xm-close">关闭</button></div>
     <div class="mbody" id="xm-body"></div>
+  </div>
+</div>
+
+<div class="modal" id="brief-modal">
+  <div class="mbox" style="width:700px;max-width:94vw">
+    <div class="mhead">
+      <h2 id="bf-title">今日早报</h2><div class="sp"></div>
+      <button class="btn gh" id="bf-export">导出简报</button>
+      <button class="btn gh" id="bf-close">关闭</button>
+    </div>
+    <div class="mbody" id="bf-body"></div>
   </div>
 </div>
 
@@ -1695,7 +1722,8 @@ document.addEventListener('click',async e=>{
       advShow(rows.length?rows.join('\n'):'暂无足够数据');
     }else if(id==='adv-senti'){
       advShow('复核中（配了 Key 会调用模型，约 10~30 秒）…');
-      const d=await apiGet('/api/sentiment?days=30&limit=30');
+      const d=await apiGet('/api/sentiment?days=30&limit=30',null,90000);
+      if(!d){ advShow('复核超时或失败：模型没在 90 秒内返回，稍后再试，或先看词典口径。'); return; }
       advShow(`模式 ${d.mode} · 样本 ${d.samples}\n词典 ${JSON.stringify(d.dict)}\n模型 ${JSON.stringify(d.llm||{})}\n一致率 ${d.agreement??'—'}\n${d.note||''}`);
     }
   }catch(err){ advShow('失败：'+err); }
@@ -1715,12 +1743,14 @@ document.addEventListener('click',async e=>{
   }
   if(e.target?.id==='zp-senti-btn'){
     const b=e.target; const box=$('#zp-senti');
-    if(box) box.textContent='复核中（配了 Key 会调用模型）…';
+    if(box) box.textContent='复核中（配了 Key 会调用模型，约 10~30 秒）…';
     b.disabled=true;
     try{
-      const d=await apiGet('/api/sentiment?days=30&limit=30');
+      const d=await apiGet('/api/sentiment?days=30&limit=30',null,90000);
+      if(!d){ if(box) box.textContent='复核超时或失败：模型没在 90 秒内返回，稍后再试。'; return; }
       if(box) box.textContent=`${d.mode==='llm'?'模型复核':'词典'} · 样本 ${d.samples} · 一致率 ${d.agreement??'—'} · 词典 ${JSON.stringify(d.dict)} · 模型 ${JSON.stringify(d.llm||{})} · ${d.note||''}`;
-    }finally{ b.disabled=false; }
+    }catch(err){ if(box) box.textContent='复核出错：'+(err&&err.message||err); }
+    finally{ b.disabled=false; }
   }
 });
 
@@ -2448,6 +2478,9 @@ async function poll(){
     return;
   }
   const b0=$('#btn-run'); if(b0) delete b0.dataset.busy;
+  // 定时采集跑完时（running true→false）自动重载图表，并检查是否该弹早报/晚报
+  if(window.__wasRunning && !s.running){ loadDash(); maybeBrief(); }
+  window.__wasRunning=!!s.running;
   window.__status=s;
   $('#llm-state').textContent=s.llm_configured?(s.llm_model||'已接模型'):'规则模式';
   const b=$('#btn-run');
@@ -2455,9 +2488,24 @@ async function poll(){
   else{b.disabled=false;b.innerHTML='立即采集';}
 }
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) poll(); });
-$('#btn-run').onclick=async()=>{
+$('#btn-run').onclick=async(e)=>{
+  const b=e.currentTarget||$('#btn-run');
+  // 采集进行中：别再发请求，直接说明状态（此时 /api/status 在忙时可能超时，别依赖它刷新按钮）
+  if(window.__status&&window.__status.running){
+    pushMsg('ai','采集已经在跑了（'+(window.__status.stage||'')+' '+(window.__status.pct||0)+'%），跑完再看结果就行。');
+    return;
+  }
+  if(b){ b.disabled=true; b.innerHTML='启动中…'; }
   const r=await apiPost('/api/run',{});
-  if(!r){ pushMsg('ai','启动采集失败，检查服务是否在运行。'); return; }
+  if(!r){
+    // POST 失败有两种：服务真没起 / 已在跑被 409 或超时挤掉。用状态接口分辨，不一律报"服务没运行"
+    const s=await apiGet('/api/status',null,8000);
+    if(s&&s.running) pushMsg('ai','采集已经在跑了（'+(s.stage||'')+' '+(s.pct||0)+'%），不用重复点。');
+    else if(s) pushMsg('ai','刚才没启动成功，再点一次试试。');
+    else pushMsg('ai','连不上本机服务：确认 LLMIntelAgent 应用已打开。');
+    if(b){ b.disabled=false; b.innerHTML='立即采集'; }
+    return;
+  }
   poll(); setTimeout(loadDash,1500);
 };
 $('#btn-run2').onclick=$('#btn-run').onclick;
@@ -2496,6 +2544,7 @@ async function switchProfile(id){
   ACTIVE=id;
   const r=await apiPost('/api/config',{llm_profiles:PROFS, llm_active:ACTIVE});
   if(r){ PROFS=(r.llm_profiles)||PROFS; }
+  const c=(await apiGet('/api/config'))||{};
   const sch=c.schedule||{};
   const [mh,mm]=String(sch.morning||"08:00").split(":");
   const [eh,em]=String(sch.evening||"20:00").split(":");
@@ -2554,6 +2603,7 @@ $('#prof-add').onchange=async e=>{
   PROFS.push({id, name:name||'新档案', base_url:base||'', model:model||'', api_key:'', web_search:true});
   ACTIVE=id;
   await apiPost('/api/config',{llm_profiles:PROFS, llm_active:ACTIVE});
+  const c=(await apiGet('/api/config'))||{};
   const sch=c.schedule||{};
   const [mh,mm]=String(sch.morning||"08:00").split(":");
   const [eh,em]=String(sch.evening||"20:00").split(":");
@@ -2572,6 +2622,7 @@ $('#prof-del').onclick=async()=>{
   PROFS=PROFS.filter(p=>p.id!==ACTIVE);
   ACTIVE=PROFS[0].id;
   await apiPost('/api/config',{llm_profiles:PROFS, llm_active:ACTIVE});
+  const c=(await apiGet('/api/config'))||{};
   const sch=c.schedule||{};
   const [mh,mm]=String(sch.morning||"08:00").split(":");
   const [eh,em]=String(sch.evening||"20:00").split(":");
@@ -2668,7 +2719,78 @@ document.querySelectorAll('#range [data-days]').forEach(b=>{
 });
 const wt0=document.getElementById('win-tag'); if(wt0) wt0.textContent='近 '+DAYS+' 天';
 
-loadDash();poll();setInterval(poll,3000);
+// ── 早报弹窗：每天早上/晚上采集完成后自动弹一次，也可点顶部报纸图标手动看 ──
+const BRIEF_LABEL={zhipu:'智谱·唐杰',competitor:'竞对动态',embodied:'具身智能',
+                   compute:'算力供应链',capital:'资本事件',other:'行业其他'};
+let BRIEF_BUSY=false;
+function briefTime(s){
+  const d=new Date(s||'');
+  return isNaN(d)?'':d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+function renderBrief(d){
+  const m=$('#brief-modal'), body=$('#bf-body');
+  if(!m||!body) return;
+  if(!d||!d.panels){
+    body.innerHTML='<div style="padding:18px;color:var(--ink3)">早报暂时取不到，稍后再试。</div>';
+    m.classList.add('on'); return;
+  }
+  const meta=d.meta||{}, lr=meta.last_run||{};
+  const when=meta.taken_at?new Date(meta.taken_at):new Date();
+  const title=(when.getHours()<12?'今日早报':'今日晚报')+' · '
+    +when.toLocaleDateString('zh-CN',{month:'long',day:'numeric'});
+  $('#bf-title').textContent=title;
+  let h='<div class="brief-hd">'
+    +(lr.new_items>0
+      ? '<b>新增 '+(lr.new_items||0)+' 条</b><span>近 '+meta.window_days+' 天共 '+(meta.items_in_window||0)+' 条</span>'
+      : '<b>近 '+meta.window_days+' 天共 '+(meta.items_in_window||0)+' 条</b>')
+    +(lr.sources_ok>0
+      ? '<span>信源 '+(lr.sources_ok||0)+' 正常'+(lr.sources_bad?' / '+lr.sources_bad+' 异常':'')+'</span>'
+      : '')
+    +'</div>';
+  for(const k of ['zhipu','competitor','embodied','compute','capital','other']){
+    const arr=d.panels[k]||[];
+    if(!arr.length) continue;
+    h+='<div class="bsec"><h4><i></i>'+(BRIEF_LABEL[k]||k)+'</h4>';
+    for(const it of arr.slice(0,3)){
+      const sm=String(it.summary||'');
+      h+='<div class="bitem"><a href="'+(esc(it.url||'#'))+'" target="_blank" rel="noopener">'
+        +esc(it.title||'')+'</a>'
+        +(sm?'<p>'+esc(sm.slice(0,110))+(sm.length>110?'…':'')+'</p>':'')
+        +'<div class="bm">'+esc(it.source||'')+' · '+esc(briefTime(it.t))+'</div></div>';
+    }
+    h+='</div>';
+  }
+  body.innerHTML=h||'<div style="padding:18px;color:var(--ink3)">今天还没有新内容。</div>';
+  m.classList.add('on');
+  try{ localStorage.setItem('brief_seen',(meta.snapshot_id||'')+'|'+String(meta.taken_at||'').slice(0,10)); }catch(_){}
+}
+async function maybeBrief(){
+  try{
+    if(window.__status&&window.__status.running) return;
+    const d=await apiGet('/api/digest',{days:1});
+    const meta=(d&&d.meta)||{}, lr=meta.last_run||{};
+    if(!meta.taken_at||lr.status!=='ok') return;
+    const day=new Date(meta.taken_at).toLocaleDateString('sv');
+    if(day!==new Date().toLocaleDateString('sv')) return;   // 只弹当天的
+    if((localStorage.getItem('brief_seen')||'')===(meta.snapshot_id||'')+'|'+day) return;
+    renderBrief(d);
+  }catch(_){}
+}
+$('#btn-brief').onclick=async()=>{
+  if(BRIEF_BUSY) return;
+  BRIEF_BUSY=true;
+  const m=$('#brief-modal'), body=$('#bf-body');
+  if(body&&!m.classList.contains('on')) body.innerHTML='<div style="padding:18px;color:var(--ink3)">正在整理…</div>';
+  const d=await apiGet('/api/digest',{days:1});
+  BRIEF_BUSY=false;
+  renderBrief(d);
+};
+$('#bf-close').onclick=()=>$('#brief-modal').classList.remove('on');
+$('#bf-export').onclick=()=>{ const b=$('#btn-export'); if(b) b.click(); };
+$('#brief-modal').addEventListener('click',e=>{ if(e.target&&e.target.id==='brief-modal') $('#brief-modal').classList.remove('on'); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') $('#brief-modal').classList.remove('on'); });
+
+loadDash();poll();setInterval(poll,3000);maybeBrief();
 (function deepLinkQS(){
   const q=new URLSearchParams(location.search);
   const d=q.get('detail'); if(d) setTimeout(()=>openDetail(+d), 600);
@@ -2867,8 +2989,16 @@ async function onbXhsLoadQr(){
   if(qr&&qr.image){
     box.innerHTML='<img src="'+qr.image+'" alt="登录二维码" style="width:148px;height:148px">';
     if(st) st.textContent='用小红书 App 扫码';
-  }else if(st){
-    st.textContent=(qr&&qr.reason)||'二维码获取失败，重试一次';
+  }else{
+    // 已经登录时小红书不再发二维码，别误报成失败
+    const s=await apiGet('/api/xhs/status');
+    if(s&&s.login&&s.login.logged_in){
+      ONB.xhs=s;
+      box.innerHTML='<div class="onb-ok">✓</div>';
+      if(st) st.textContent='已登录。下次采集会一并读评论。';
+    }else if(st){
+      st.textContent=(qr&&qr.reason)||'二维码获取失败，重试一次';
+    }
   }
 }
 function onbXhsPoll(){
