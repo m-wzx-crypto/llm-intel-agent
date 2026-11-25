@@ -38,20 +38,23 @@ FOCUS = {
     "昇腾": ["昇腾"],
 }
 
-def _days(window=WINDOW):
-    today = datetime.now(timezone.utc).date()
+def _days(window=WINDOW, as_of=None):
+    current = as_of or datetime.now(timezone.utc)
+    today = current.date()
     return [(today - timedelta(days=i)).isoformat() for i in range(window - 1, -1, -1)]
 
 
-def _doc_rows(conn, window=WINDOW, q: str | None = None, full: bool = False):
-    since = (datetime.now(timezone.utc) - timedelta(days=window + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _doc_rows(conn, window=WINDOW, q: str | None = None, full: bool = False, as_of=None):
+    current = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    since = (current - timedelta(days=window + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    until = current.strftime("%Y-%m-%dT%H:%M:%SZ")
     cols = "d.id, d.title, d.t_valid, d.source_name, d.source_id, i.summary"
     if full:
         cols += ", d.content, d.url"
     sql = (f"SELECT {cols} FROM doc d "
            "LEFT JOIN item i ON i.doc_id=d.id "
-           "WHERE d.t_valid>=? AND d.dupe_of IS NULL")
-    args = [since]
+           "WHERE d.t_valid>=? AND d.t_valid<=? AND d.dupe_of IS NULL")
+    args = [since, until]
     if q:
         sql += " AND (d.title LIKE ? OR d.content LIKE ?)"
         args += [f"%{q}%", f"%{q}%"]
@@ -68,21 +71,22 @@ def _half_slope(series):
     return round(b - a, 2)
 
 
-def _today_new(conn, window: int) -> int:
+def _today_new(conn, window: int, as_of=None) -> int:
     """今天新入库且落在本窗口内的条数（按 t_txn=我们得知的时间）。
     限定窗口：否则预置的历史文章会把「今日」顶到比窗口总数还大，界面自相矛盾。"""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    since = (datetime.now(timezone.utc) - timedelta(days=window + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    current = as_of or datetime.now(timezone.utc)
+    today = current.date().isoformat()
+    since = (current.astimezone(timezone.utc) - timedelta(days=window + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return int(conn.execute(
         "SELECT count(*) FROM doc WHERE dupe_of IS NULL AND substr(t_txn,1,10)=? "
         "AND t_valid >= ?", (today, since)).fetchone()[0])
 
 
-def build_metrics(window=WINDOW, q: str | None = None) -> dict:
+def build_metrics(window=WINDOW, q: str | None = None, as_of=None) -> dict:
     conn = db.connect()
     try:
-        rows = _doc_rows(conn, window, q, full=True)
-        days = _days(window)
+        rows = _doc_rows(conn, window, q, full=True, as_of=as_of)
+        days = _days(window, as_of=as_of)
         day_idx = {d: i for i, d in enumerate(days)}
 
         # 逐条落到「第几天」
@@ -173,7 +177,7 @@ def build_metrics(window=WINDOW, q: str | None = None) -> dict:
                   "tangjie": tangjie_series, "utterance": first_series}]
 
         return {
-            "today_new": _today_new(conn, window),
+            "today_new": _today_new(conn, window, as_of=as_of),
             "meta": {
                 "window_days": window,
                 "days": days,

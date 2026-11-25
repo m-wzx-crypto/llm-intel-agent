@@ -156,6 +156,18 @@ CREATE TABLE IF NOT EXISTS weekly (
   payload      TEXT NOT NULL
 );
 
+-- 每日分析报告（按日唯一，payload 是完整成品 JSON）
+CREATE TABLE IF NOT EXISTS daily_report (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  report_date  TEXT NOT NULL UNIQUE,
+  snapshot_id  INTEGER REFERENCES snapshot(id),
+  run_id       INTEGER REFERENCES run(id),
+  generated_at TEXT NOT NULL,
+  mode         TEXT NOT NULL DEFAULT 'rule',
+  tokens       INTEGER NOT NULL DEFAULT 0,
+  payload      TEXT NOT NULL
+);
+
 -- 预测台账（一等公民；本版先建表，结构按方案 §3.2）
 CREATE TABLE IF NOT EXISTS prediction (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,

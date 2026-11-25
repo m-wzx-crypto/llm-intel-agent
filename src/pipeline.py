@@ -48,6 +48,34 @@ def _exists(conn, guid: str) -> bool:
     return conn.execute("SELECT 1 FROM doc WHERE guid=?", (guid,)).fetchone() is not None
 
 
+def _generate_daily_report(run_id: int, snapshot_id: int, llm, progress=None) -> dict:
+    """晨间报告与采集解耦：失败只记结果，不把已成功的采集改判为失败。"""
+    import daily_report
+    before = (getattr(llm, "tokens", 0), getattr(llm, "cached_tokens", 0),
+              getattr(llm, "reasoning_tokens", 0))
+    result = {"generated": False, "tokens": 0}
+    try:
+        if progress:
+            progress("分析", 93, "生成每日自主分析报告")
+        report = daily_report.ensure_report(run_id=run_id, snapshot_id=snapshot_id,
+                                            llm=llm, force=True)
+        result.update(generated=True, report_date=report["report_date"],
+                      mode=report["mode"], tokens=report["tokens"])
+    except Exception as e:
+        result["error"] = str(e)[:300]
+    finally:
+        used = getattr(llm, "tokens", 0) - before[0]
+        cached = getattr(llm, "cached_tokens", 0) - before[1]
+        reasoning = getattr(llm, "reasoning_tokens", 0) - before[2]
+        result["tokens"] = max(0, used)
+        if used > 0:
+            try:
+                db.add_tokens(used, "daily_report", cached, reasoning)
+            except Exception:
+                pass
+    return result
+
+
 def run_daily(progress=None, slot: str = "morning") -> dict:
     """跑一次完整采集（跨进程串行：拿不到 data.lock 就直接跳过）。"""
     import locks
@@ -362,24 +390,33 @@ def _run_daily_impl(progress=None, slot: str = "morning") -> dict:
 
         say("建图", 90, "冻结快照")
         max_item = conn.execute("SELECT COALESCE(MAX(id),0) FROM item").fetchone()[0]
-        conn.execute("INSERT INTO snapshot (taken_at,max_item_id,run_id) VALUES (?,?,?)",
-                     (db.now_iso(), max_item, run_id))
+        snap = conn.execute("INSERT INTO snapshot (taken_at,max_item_id,run_id) VALUES (?,?,?)",
+                            (db.now_iso(), max_item, run_id))
+        snapshot_id = snap.lastrowid
         conn.commit()
 
+        collection_tokens = llm.tokens
+        collection_cached = llm.cached_tokens
+        collection_reasoning = llm.reasoning_tokens
         db.finish_run(run_id, status="ok", new_items=new_items, ok=ok, bad=bad,
                       note=(f"slot={slot} fetched_bodies={fetched_bodies} "
                             f"llm_calls={llm_calls} merged={dedupe_stats.get('merged_docs', 0)}"),
-                      cost=llm.tokens)
+                      cost=collection_tokens)
         # 记入当日 token 台账（早报/晚报/对话共用一份预算）
         try:
-            db.add_tokens(llm.tokens, "run", llm.cached_tokens, llm.reasoning_tokens)
+            db.add_tokens(collection_tokens, "run", collection_cached, collection_reasoning)
         except Exception:
             pass
+        daily_report_result = None
+        if slot == "morning":
+            daily_report_result = _generate_daily_report(
+                run_id, snapshot_id, llm, progress=progress)
         say("完成", 100, f"新增 {new_items} 条")
         return {"run_id": run_id, "new_items": new_items, "merged_stories": merged,
                 "event_merge": dedupe_stats,
                 "duplicates": sum(len(g) for g in dup_group_map.values()), "sources_ok": ok,
-                "sources_bad": bad, "llm_calls": llm_calls, "tokens": llm.tokens,
+                "sources_bad": bad, "llm_calls": llm_calls, "tokens": collection_tokens,
+                "daily_report": daily_report_result,
                 "slot": slot, "today_tokens": db.today_tokens(),
                 "xhs": _xhs_status, "sources": per_source}
     except Exception as e:

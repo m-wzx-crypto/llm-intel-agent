@@ -89,11 +89,11 @@ def _rule_answer(question: str) -> dict:
 
 
 SYS = """你是中文产业链情报分析员。回答规则：
-1) 必须先消化【本地证据】（我们自己的信源库），再用联网检索补充最新外部信息；
+1) 先消化【本地证据】（我们自己的信源库）；有联网信息时再补充最新外部信息；
 2) 每条结论后用【编号】标注来源，本地证据用 L1/L2…，联网来源用 W1/W2…；
 3) 本地与联网冲突时明确指出差异，不要掩盖；
 4) 只给事实与判断依据，不编造数字；证据不足就说证据不足；
-5) 中文，220 字以内。"""
+5) 中文，500 字以内，先给结论再给依据。"""
 
 
 def _augment_retrieval(question: str, base: dict) -> None:
@@ -140,36 +140,59 @@ def answer(question: str) -> dict:
     for i, r in enumerate(base.get("cites") or [], 1):
         ev_lines.append(f"[L{i}] {r.get('title','')[:60]}（{r.get('source','')}）")
     local_ev = "\n".join(ev_lines) or "（本地库无直接命中）"
+    web_enabled = bool(llml.get("web_search", True))
+    instruction = ("请结合联网检索补充最新信息，按编号引用后综合回答。" if web_enabled
+                   else "请仅依据本地证据综合回答，按编号引用。")
     user = (f"问题：{question}\n\n【本地证据】\n{local_ev}\n\n"
-            f"【本地初步结论】{base.get('text','')[:400]}\n\n"
-            "请结合联网检索补充最新信息，按编号引用后综合回答。")
+            f"【本地初步结论】{base.get('text','')[:400]}\n\n{instruction}")
 
-    r = LLM(llml).chat_web(SYS, user, 700) if llml.get("web_search", True) \
-        else {"ok": True, "text": "", "citations": [], "sources": [], "queries": [], "steps": []}
-    if not r.get("ok"):
-        base["mode"] = "rule"
-        base["note"] = f"模型调用失败，已回退规则回答：{r.get('error','')[:80]}"
-        return base
-
-    cites = list(base.get("cites") or [])
-    for c in (r.get("citations") or []) + (r.get("sources") or []):
-        if c.get("url") and all(c["url"] != x.get("url") for x in cites):
-            cites.append({"title": c.get("title") or c["url"], "url": c["url"],
-                          "source": c.get("site") or "联网"})
+    llm = LLM(llml)
+    r = {}
     try:
-        import ratelimit
-        total, hit = ratelimit.billable(r.get("usage") or {})   # 全额：缓存命中照算
-        db.add_tokens(total, "chat", hit, 0)
-    except Exception:
-        pass
-    return {
-        "text": r.get("text") or base.get("text", ""),
-        "cites": cites,
-        "mode": "llm",
-        "web": {"queries": r.get("queries") or [],
-                "used": bool(r.get("sources") or r.get("citations")),
-                "steps": r.get("steps") or []},
-    }
+        if web_enabled:
+            r = llm.chat_web(SYS, user, 1600)
+        else:
+            try:
+                text = llm.chat(SYS, user, max_tokens=1600)
+                r = {"ok": bool(text), "text": text, "citations": [], "sources": [],
+                     "queries": [], "steps": [],
+                     "usage": {"total_tokens": llm.tokens,
+                               "prompt_cache_hit_tokens": llm.cached_tokens},
+                     "error": None if text else "模型未返回文本"}
+            except Exception as e:
+                r = {"ok": False, "error": str(e)[:300]}
+        if not r.get("ok"):
+            base["mode"] = "rule"
+            if r.get("truncated"):
+                base["note"] = "模型输出未完成，已切换规则回答。"
+            else:
+                base["note"] = f"模型调用失败，已回退规则回答：{r.get('error','')[:80]}"
+            return base
+
+        cites = list(base.get("cites") or [])
+        for c in (r.get("citations") or []) + (r.get("sources") or []):
+            if c.get("url") and all(c["url"] != x.get("url") for x in cites):
+                cites.append({"title": c.get("title") or c["url"], "url": c["url"],
+                              "source": c.get("site") or "联网"})
+        return {
+            "text": r.get("text") or base.get("text", ""),
+            "cites": cites,
+            "mode": "llm",
+            "web": {"queries": r.get("queries") or [],
+                    "used": bool(r.get("sources") or r.get("citations")),
+                    "steps": r.get("steps") or []},
+        }
+    finally:
+        try:
+            import ratelimit
+            if r.get("usage"):
+                total, hit = ratelimit.billable(r["usage"])
+            else:
+                total = getattr(llm, "tokens", 0)
+                hit = getattr(llm, "cached_tokens", 0)
+            db.add_tokens(total, "chat", hit, 0)
+        except Exception:
+            pass
 
 
 def _find_entity(q):

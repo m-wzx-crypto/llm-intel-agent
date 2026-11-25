@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from datetime import date as date_cls
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import chat as chat_mod
@@ -21,7 +22,7 @@ STATE = {"running": False, "stage": "", "pct": 0, "msg": "", "last_result": None
 TASKS = []          # 任务流水（内存态，重启清空）
 KIND_LABEL = {"collect": "采集一次", "dig": "深挖实体", "predict": "生成预测",
               "export": "导出简报", "dedupe": "去重合并", "weekly": "生成周报",
-              "xhs": "小红书评论采集"}
+              "daily_report": "生成早报", "xhs": "小红书评论采集"}
 _LOCK = threading.Lock()
 
 if getattr(sys, "frozen", False):
@@ -109,6 +110,39 @@ def _llm_for_cfg():
     """按当前激活档案构造一个 LLM 实例（周报写总结用）。"""
     cfg = pipeline.apply_active_profile(pipeline.load_config())
     return LLM(cfg.get("llm") or {})
+
+
+def _valid_report_date(value: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return date_cls.fromisoformat(value).isoformat() == value
+    except Exception:
+        return False
+
+
+def _do_daily_report(report_date: str | None = None, force: bool = True) -> dict:
+    import daily_report
+    import locks
+    handle = locks.acquire("data", blocking=False)
+    if handle is None:
+        raise RuntimeError("采集正在运行，请完成后再生成日报")
+    try:
+        llm = _llm_for_cfg()
+        try:
+            report = daily_report.ensure_report(report_date=report_date, llm=llm, force=force)
+        finally:
+            used = getattr(llm, "tokens", 0)
+            try:
+                db.add_tokens(used, "daily_report",
+                              getattr(llm, "cached_tokens", 0),
+                              getattr(llm, "reasoning_tokens", 0))
+            except Exception:
+                pass
+        return {"generated": True, "report_date": report["report_date"],
+                "mode": report["mode"], "tokens": used}
+    finally:
+        locks.release(handle)
 
 
 def _do_dedupe() -> dict:
@@ -590,6 +624,47 @@ class Handler(BaseHTTPRequestHandler):
             _json(self, safe)
             return
 
+        if p == "/api/daily-report":
+            import daily_report
+            requested = (q.get("date", [""])[0] or "").strip()
+            if requested and not _valid_report_date(requested):
+                _json(self, {"error": "日期格式应为 YYYY-MM-DD"}, 400)
+                return
+            try:
+                report = daily_report.get(requested) if requested else daily_report.latest()
+                if requested and report is None:
+                    _json(self, {"error": "指定日期还没有日报"}, 404)
+                    return
+                _json(self, {"report": report, "reports": daily_report.listing(),
+                             "date": report["report_date"] if report else requested})
+            except Exception as e:
+                _json(self, {"error": str(e)[:300]}, 500)
+            return
+
+        if p == "/api/daily-report/export":
+            import daily_report
+            requested = (q.get("date", [""])[0] or "").strip()
+            if requested and not _valid_report_date(requested):
+                _json(self, {"error": "日期格式应为 YYYY-MM-DD"}, 400)
+                return
+            try:
+                report = daily_report.get(requested) if requested else daily_report.latest()
+                if report is None:
+                    _json(self, {"error": "还没有可导出的日报"}, 404)
+                    return
+                body = daily_report.to_markdown(report).encode("utf-8")
+                filename = f"daily-report-{report['report_date']}.md"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                _json(self, {"error": str(e)[:300]}, 500)
+            return
+
         if p == "/api/export":
             cfg = pipeline.load_config()
             out = os.path.join(db.app_dir(), "digest.json")
@@ -854,6 +929,27 @@ class Handler(BaseHTTPRequestHandler):
                 _json(self, {"ok": False, "msg": "unknown action"}, 400)
             return
 
+        if u.path == "/api/daily-report":
+            raw_date = payload.get("date")
+            if raw_date is not None and not isinstance(raw_date, str):
+                _json(self, {"ok": False, "error": "日期格式应为 YYYY-MM-DD"}, 400)
+                return
+            requested = (raw_date or "").strip()
+            if requested and not _valid_report_date(requested):
+                _json(self, {"ok": False, "error": "日期格式应为 YYYY-MM-DD"}, 400)
+                return
+            try:
+                result = _do_daily_report(requested or None, force=bool(payload.get("force", True)))
+                _json(self, {"ok": True, **result})
+            except ValueError as e:
+                _json(self, {"ok": False, "error": str(e)[:300]}, 400)
+            except RuntimeError as e:
+                code = 409 if "采集正在运行" in str(e) else 500
+                _json(self, {"ok": False, "error": str(e)[:300]}, code)
+            except Exception as e:
+                _json(self, {"ok": False, "error": str(e)[:300]}, 500)
+            return
+
         if u.path == "/api/task":
             kind = payload.get("type") or "collect"
             TASKS.append({"type": kind, "label": payload.get("label") or KIND_LABEL.get(kind, kind),
@@ -869,6 +965,11 @@ class Handler(BaseHTTPRequestHandler):
             elif kind == "weekly":
                 TASKS.pop()
                 _bg("weekly", lambda: _do_weekly((payload.get("args") or {}).get("week")))
+            elif kind == "daily_report":
+                TASKS.pop()
+                args = payload.get("args") or {}
+                _bg("daily_report", lambda: _do_daily_report(
+                    args.get("date"), force=bool(args.get("force", True))))
             else:
                 TASKS[-1]["status"] = "done"
             _json(self, {"ok": True})

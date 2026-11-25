@@ -169,6 +169,40 @@
   .bitem a:hover{color:var(--brand)}
   .bitem p{margin:3px 0 0;font-size:12px;color:var(--ink2);line-height:1.55}
   .bitem .bm{font-size:10.5px;color:var(--ink3);margin-top:3px}
+  .daily-head{padding:4px 0 16px;border-bottom:1px solid var(--line2)}
+  .daily-kicker{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;
+                font-size:10.5px;color:var(--ink3)}
+  .daily-mode{padding:3px 7px;border-radius:99px;background:#eef2ff;color:#4338ca;font-weight:700}
+  .daily-head h3{margin:0 0 8px;font-size:21px;line-height:1.35;letter-spacing:-.02em}
+  .daily-summary{margin:0;color:var(--ink2);font-size:13px;line-height:1.75}
+  .daily-section{margin-top:20px}
+  .daily-section h4{display:flex;align-items:center;gap:8px;margin:0 0 9px;font-size:13px}
+  .daily-section h4 i{width:7px;height:7px;border-radius:2px;background:var(--brand);flex:none}
+  .daily-list{margin:0;padding:0;list-style:none}
+  .daily-list li{position:relative;margin:0 0 8px;padding:9px 11px 9px 25px;border-radius:9px;
+                 background:#f8fafc;color:var(--ink2);font-size:12.5px;line-height:1.7}
+  .daily-list li:before{content:'';position:absolute;left:11px;top:17px;width:4px;height:4px;
+                        border-radius:50%;background:#94a3b8}
+  .bcite{display:inline-block;margin:0 2px;padding:0 4px;border:0;border-radius:4px;
+         background:#eef2ff;color:#4338ca;font:inherit;font-size:11px;cursor:pointer}
+  .bcite:hover{background:#e0e7ff}
+  .daily-quality{margin-top:22px;border:1px solid var(--line2);border-radius:11px;overflow:hidden}
+  .daily-quality summary{padding:11px 13px;background:#f8fafc;cursor:pointer;font-size:12px;font-weight:700}
+  .daily-quality-inner{padding:12px 13px}
+  .daily-facts{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .daily-facts span{padding:5px 8px;border-radius:7px;background:#f1f5f9;font-size:11px;color:var(--ink2)}
+  .daily-note{margin:7px 0 0;color:var(--ink3);font-size:11px;line-height:1.65}
+  .daily-evidence{margin-top:12px;border-top:1px solid var(--line2);padding-top:9px}
+  .daily-ev{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;
+            padding:8px 0;border-bottom:1px dashed var(--line2)}
+  .daily-ev:last-child{border-bottom:0}
+  .daily-ev-code{font:700 10.5px/1.6 ui-monospace,Menlo,monospace;color:#4338ca}
+  .daily-ev-title{padding:0;border:0;background:none;color:var(--ink);font-family:inherit;
+                  font-size:12px;font-weight:600;line-height:1.5;text-align:left;cursor:pointer}
+  .daily-ev-title:hover{color:var(--brand)}
+  .daily-ev small{display:block;margin-top:3px;color:var(--ink3);font-size:10.5px;line-height:1.5}
+  .daily-ev a{color:var(--brand);font-size:11px;text-decoration:none;white-space:nowrap}
+  .daily-empty{padding:26px 8px;color:var(--ink3);font-size:12.5px;line-height:1.8;text-align:center}
   .ubar{height:6px;background:#eef2f8;border-radius:99px;overflow:hidden}
   .ubar i{display:block;height:100%;background:linear-gradient(90deg,#4f46e5,#818cf8);transition:width .3s}
   .ubar.warn i{background:linear-gradient(90deg,#f59e0b,#fbbf24)}
@@ -925,10 +959,10 @@ https://mp.weixin.qq.com/s/xxxxxxxx"
 </div>
 
 <div class="modal" id="brief-modal">
-  <div class="mbox" style="width:700px;max-width:94vw">
+  <div class="mbox" style="width:780px;max-width:94vw">
     <div class="mhead">
       <h2 id="bf-title">今日早报</h2><div class="sp"></div>
-      <button class="btn gh" id="bf-export">导出简报</button>
+      <button class="btn gh" id="bf-export">导出 Markdown</button>
       <button class="btn gh" id="bf-close">关闭</button>
     </div>
     <div class="mbody" id="bf-body"></div>
@@ -2217,7 +2251,7 @@ function pushMsg(role,text,cites,meta){
     cites.forEach((x,idx)=>{
       const b=document.createElement('button');b.className='cite';
       b.innerHTML=`<b>${idx+1}</b>${esc((x.title||'').slice(0,13))}…`;
-      b.onclick=()=>openDetail(x.id);c.appendChild(b);});
+      b.onclick=()=>{if(x.id!=null)openDetail(x.id);else if(/^https?:\/\//i.test(String(x.url||'')))window.open(String(x.url),'_blank','noopener');};c.appendChild(b);});
     d.appendChild(c);
   }
   if(meta && (meta.mode==='llm' || (meta.web&&meta.web.used))){
@@ -2246,8 +2280,9 @@ async function ask(q){
   t.innerHTML='<span class="dots"><i></i><i></i><i></i></span>';
   $('#msgs').appendChild(t);$('#msgs').scrollTop=$('#msgs').scrollHeight;
   try{
-    const d=await apiPost('/api/chat',{q},null,60000);
+    const d=await apiPost('/api/chat',{q},null,150000);
     if(!d){
+      t.remove();
       pushMsg('ai', NET_DOWN>=2
         ? '本地服务未连接，请重新打开应用后刷新本页。'
         : '请求超时或服务正忙，稍后再试一次。');
@@ -2255,7 +2290,7 @@ async function ask(q){
     }
     t.remove();pushMsg('ai',d.text||'（没有回答）',d.cites,d);
   }catch(e){t.textContent='请求失败：'+e.message;}
-  $('#send').disabled=false;
+  finally{$('#send').disabled=false;}
 }
 $('#send').onclick=()=>ask($('#ask').value);
 document.querySelectorAll('.ce-chip').forEach(b=>b.onclick=()=>ask(b.textContent));
@@ -2719,22 +2754,89 @@ document.querySelectorAll('#range [data-days]').forEach(b=>{
 });
 const wt0=document.getElementById('win-tag'); if(wt0) wt0.textContent='近 '+DAYS+' 天';
 
-// ── 早报弹窗：每天早上/晚上采集完成后自动弹一次，也可点顶部报纸图标手动看 ──
+// ── 早报弹窗：晨间显示完整分析报告，晚间保持 digest 情报流 ──
 const BRIEF_LABEL={zhipu:'智谱·唐杰',competitor:'竞对动态',embodied:'具身智能',
                    compute:'算力供应链',capital:'资本事件',other:'行业其他'};
-let BRIEF_BUSY=false;
+let BRIEF_BUSY=false, BRIEF_KIND='daily', BRIEF_DATE='';
 function briefTime(s){
   const d=new Date(s||'');
   return isNaN(d)?'':d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 }
+function briefDay(d){
+  return new Date(d.getTime()+8*60*60*1000).toISOString().slice(0,10);
+}
+function briefUrl(s){
+  return /^https?:\/\//i.test(String(s||''))?String(s):'#';
+}
+function briefRich(text){
+  return esc(text).replace(/\[(L\d+)\]/g,'<button type="button" class="bcite" data-cite="$1">[$1]</button>');
+}
+function bindBriefCitations(body,evidence){
+  const byCite=Object.fromEntries((evidence||[]).map(e=>[e.citation,e]));
+  body.querySelectorAll('[data-cite]').forEach(b=>{
+    const item=byCite[b.dataset.cite];
+    if(item&&item.id!=null)b.onclick=()=>openDetail(+item.id);
+  });
+}
+function renderDailyReport(d){
+  const m=$('#brief-modal'), body=$('#bf-body');
+  if(!m||!body)return;
+  BRIEF_KIND='daily';
+  const r=(d&&d.report)||null;
+  BRIEF_DATE=(r&&r.report_date)||(d&&d.date)||'';
+  $('#bf-export').textContent='导出 Markdown';
+  if(!r){
+    $('#bf-title').textContent='今日早报';
+    body.innerHTML='<div class="daily-empty">今日早报尚未生成。<br>完成晨间采集后会自动生成完整分析报告。</div>';
+    m.classList.add('on');return;
+  }
+  const q=r.data_quality||{}, health=q.source_health||{}, evidence=r.evidence||[];
+  const bad=(health.unavailable||0)+(health.parse_broken||0);
+  $('#bf-title').textContent='每日自主分析报告 · '+String(r.report_date||'').slice(5);
+  let h='<div class="daily-head"><div class="daily-kicker">'
+    +'<span class="daily-mode">'+(r.mode==='llm'?'模型综合':'规则报告')+'</span>'
+    +'<span>滚动24小时 · 14日基线</span><span>生成于 '+esc(briefTime(r.generated_at))+'</span></div>'
+    +'<h3>'+esc(r.headline||'每日分析报告')+'</h3>'
+    +'<p class="daily-summary">'+briefRich(r.executive_summary||'')+'</p></div>';
+  for(const sec of r.sections||[]){
+    h+='<section class="daily-section"><h4><i></i>'+esc(sec.title||'')+'</h4><ul class="daily-list">'
+      +(sec.bullets||[]).map(b=>'<li>'+briefRich(b)+'</li>').join('')+'</ul></section>';
+  }
+  h+='<details class="daily-quality"><summary>证据与数据质量</summary><div class="daily-quality-inner">'
+    +'<div class="daily-facts"><span>独立事件 '+(q.independent_events||0)+' 起</span>'
+    +'<span>排除转载 '+(q.reposts_excluded||0)+' 条</span>'
+    +'<span>信源 '+(health.total||0)+' 个 / 异常 '+bad+'</span></div>'
+    +'<p class="daily-note">'+esc(q.proxy_note||'全部量为媒体报道频次代理')+'</p>'
+    +(q.llm_note?'<p class="daily-note">'+esc(q.llm_note)+'</p>':'')
+    +((health.issues||[]).length?'<p class="daily-note">异常信源：'
+      +esc((health.issues||[]).map(x=>x.name).join('、'))+'</p>':'')
+    +'<div class="daily-evidence">';
+  for(const e of evidence){
+    h+='<div class="daily-ev"><span class="daily-ev-code">'+esc(e.citation)+'</span><div>'
+      +'<button type="button" class="daily-ev-title" data-doc="'+esc(String(e.id))+'">'+esc(e.title||'')+'</button>'
+      +'<small>'+esc(e.source||'')+' · '+esc(briefTime(e.t_valid))+' · '
+      +esc(e.category||'')+(e.coverage>1?' · '+e.coverage+' 家报道':'')+'</small>'
+      +(e.summary?'<small>'+esc(String(e.summary).slice(0,160))+'</small>':'')+'</div>'
+      +'<a href="'+esc(briefUrl(e.url))+'" target="_blank" rel="noopener noreferrer">原文</a></div>';
+  }
+  h+='</div></div></details>';
+  body.innerHTML=h;
+  bindBriefCitations(body,evidence);
+  body.querySelectorAll('[data-doc]').forEach(b=>b.onclick=()=>openDetail(+b.dataset.doc));
+  m.classList.add('on');
+  try{localStorage.setItem('brief_seen','daily|'+r.report_date+'|'+(r.generated_at||''));}catch(_){}
+}
 function renderBrief(d){
   const m=$('#brief-modal'), body=$('#bf-body');
   if(!m||!body) return;
+  BRIEF_KIND='digest';
+  $('#bf-export').textContent='导出简报';
   if(!d||!d.panels){
-    body.innerHTML='<div style="padding:18px;color:var(--ink3)">早报暂时取不到，稍后再试。</div>';
+    body.innerHTML='<div class="daily-empty">晚报暂时取不到，稍后再试。</div>';
     m.classList.add('on'); return;
   }
   const meta=d.meta||{}, lr=meta.last_run||{};
+  BRIEF_DATE=String(meta.taken_at||'').slice(0,10);
   const when=meta.taken_at?new Date(meta.taken_at):new Date();
   const title=(when.getHours()<12?'今日早报':'今日晚报')+' · '
     +when.toLocaleDateString('zh-CN',{month:'long',day:'numeric'});
@@ -2753,16 +2855,16 @@ function renderBrief(d){
     h+='<div class="bsec"><h4><i></i>'+(BRIEF_LABEL[k]||k)+'</h4>';
     for(const it of arr.slice(0,3)){
       const sm=String(it.summary||'');
-      h+='<div class="bitem"><a href="'+(esc(it.url||'#'))+'" target="_blank" rel="noopener">'
+      h+='<div class="bitem"><a href="'+esc(briefUrl(it.url))+'" target="_blank" rel="noopener">'
         +esc(it.title||'')+'</a>'
         +(sm?'<p>'+esc(sm.slice(0,110))+(sm.length>110?'…':'')+'</p>':'')
         +'<div class="bm">'+esc(it.source||'')+' · '+esc(briefTime(it.t))+'</div></div>';
     }
     h+='</div>';
   }
-  body.innerHTML=h||'<div style="padding:18px;color:var(--ink3)">今天还没有新内容。</div>';
+  body.innerHTML=h||'<div class="daily-empty">今天还没有新内容。</div>';
   m.classList.add('on');
-  try{ localStorage.setItem('brief_seen',(meta.snapshot_id||'')+'|'+String(meta.taken_at||'').slice(0,10)); }catch(_){}
+  try{ localStorage.setItem('brief_seen',(meta.snapshot_id||'')+'|'+BRIEF_DATE); }catch(_){}
 }
 async function maybeBrief(){
   try{
@@ -2770,23 +2872,45 @@ async function maybeBrief(){
     const d=await apiGet('/api/digest',{days:1});
     const meta=(d&&d.meta)||{}, lr=meta.last_run||{};
     if(!meta.taken_at||lr.status!=='ok') return;
-    const day=new Date(meta.taken_at).toLocaleDateString('sv');
-    if(day!==new Date().toLocaleDateString('sv')) return;   // 只弹当天的
-    if((localStorage.getItem('brief_seen')||'')===(meta.snapshot_id||'')+'|'+day) return;
-    renderBrief(d);
+    const day=briefDay(new Date(meta.taken_at));
+    if(day!==briefDay(new Date())) return;
+    const when=new Date(meta.taken_at);
+    const morning=/slot=morning/.test(String(lr.note||''))||(!lr.note&&when.getHours()<12);
+    if(morning){
+      const report=await apiGet('/api/daily-report?date='+day);
+      if(!report||!report.report)return;
+      const r=report.report, seen='daily|'+r.report_date+'|'+(r.generated_at||'');
+      if((localStorage.getItem('brief_seen')||'')===seen)return;
+      renderDailyReport(report);
+    }else{
+      if((localStorage.getItem('brief_seen')||'')===(meta.snapshot_id||'')+'|'+day)return;
+      renderBrief(d);
+    }
   }catch(_){}
 }
-$('#btn-brief').onclick=async()=>{
-  if(BRIEF_BUSY) return;
+async function openDailyReport(){
+  if(BRIEF_BUSY)return;
   BRIEF_BUSY=true;
-  const m=$('#brief-modal'), body=$('#bf-body');
-  if(body&&!m.classList.contains('on')) body.innerHTML='<div style="padding:18px;color:var(--ink3)">正在整理…</div>';
-  const d=await apiGet('/api/digest',{days:1});
-  BRIEF_BUSY=false;
-  renderBrief(d);
-};
+  try{
+    const day=briefDay(new Date());
+    const d=await apiGet('/api/daily-report?date='+day);
+    renderDailyReport(d);
+  }catch(_){
+    renderDailyReport(null);
+  }finally{
+    BRIEF_BUSY=false;
+  }
+}
+function exportBrief(){
+  if(BRIEF_KIND==='daily'&&BRIEF_DATE){
+    window.open('/api/daily-report/export?date='+encodeURIComponent(BRIEF_DATE),'_blank','noopener');
+    return;
+  }
+  const b=$('#btn-export');if(b)b.click();
+}
+$('#btn-brief').onclick=openDailyReport;
 $('#bf-close').onclick=()=>$('#brief-modal').classList.remove('on');
-$('#bf-export').onclick=()=>{ const b=$('#btn-export'); if(b) b.click(); };
+$('#bf-export').onclick=exportBrief;
 $('#brief-modal').addEventListener('click',e=>{ if(e.target&&e.target.id==='brief-modal') $('#brief-modal').classList.remove('on'); });
 document.addEventListener('keydown',e=>{ if(e.key==='Escape') $('#brief-modal').classList.remove('on'); });
 

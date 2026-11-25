@@ -137,7 +137,10 @@ class LLM:
             return {"ok": False, "error": str(e)[:300]}
         if j.get("error"):
             return {"ok": False, "error": str(j["error"])[:300]}
-        msg = ((j.get("choices") or [{}])[0]).get("message") or {}
+        choice = (j.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        finish_reason = choice.get("finish_reason")
+        truncated = finish_reason == "length"
         text = msg.get("content") or ""
         cites, sources, queries, steps = [], [], [], []
         for a in (msg.get("annotations") or []):
@@ -162,9 +165,11 @@ class LLM:
         total, hit = ratelimit.billable(u)
         self.tokens += total
         self.cached_tokens += hit
-        return {"ok": bool(text), "text": text, "citations": cites[:12],
+        return {"ok": bool(text) and not truncated, "text": text, "citations": cites[:12],
                 "sources": sources[:12], "queries": queries[:6], "steps": steps,
-                "usage": u, "error": None if text else "模型未返回文本"}
+                "usage": u, "finish_reason": finish_reason, "truncated": truncated,
+                "error": ("模型输出达到 token 上限" if truncated else
+                          (None if text else "模型未返回文本"))}
 
     def chat(self, system: str, user: str, max_tokens=400) -> str:
         """一次对话。注意推理模型的坑：
@@ -172,7 +177,7 @@ class LLM:
         deepseek-flash / glm 这类推理模型会先花 token 思考，思考也计入 max_tokens。
         预算给小了（实测 220）会出现 finish_reason=length 且 content 为空——
         调用方看到空字符串会以为"模型没话说"，实际上是被自己的预算掐死的。
-        所以：返回空且用满了预算时，自动放大预算重试一次。
+        所以：命中长度上限时，自动放大预算重试；仍不完整就抛错让调用方降级。
         """
         if not self.enabled:
             raise RuntimeError("未配置 API Key")
@@ -185,10 +190,10 @@ class LLM:
             except BudgetExceeded:
                 self.budget_hit = True
                 raise
-            if text or not used_all:
+            if not used_all:
                 return text
             budget = 900 if attempt == 0 else 3000   # 逐次放大思考空间
-        return ""
+        raise RuntimeError("模型输出未完成")
 
     def _chat_once(self, system: str, user: str, max_tokens: int) -> tuple[str, bool]:
         body = json.dumps({
@@ -215,7 +220,7 @@ class LLM:
                                      .get("reasoning_tokens") or 0)
         ch = (data.get("choices") or [{}])[0]
         text = ((ch.get("message") or {}).get("content") or "").strip()
-        return text, (not text) and ch.get("finish_reason") == "length"
+        return text, ch.get("finish_reason") == "length"
 
     def summarize(self, title: str, content: str) -> str:
         sys_p = ("你是产业链情报分析师。用中文写一句话摘要，要求："
