@@ -1143,6 +1143,194 @@ def _parse_zhipu_cards(html: str, cutoff: str, seen: set) -> list[dict]:
     return out
 
 
+# ── 百度：资讯搜索 + 热搜榜 ──
+# 实测（2026-11-28）：资讯搜索 200，单页 15 条（内嵌 <!--s-data:{...}-->）；
+# 连续请求会触发「百度安全验证」，因此限速并显式报错，不能当成 0 命中。
+_BAIDU_LAST = 0.0
+_BAIDU_GAP = 45.0         # 两次百度资讯请求的最小间隔（秒）
+_BAIDU_BLOCK_UNTIL = 0.0  # 触发安全验证后的冷却截止（同进程内不再打百度）
+
+
+class BaiduBlocked(RuntimeError):
+    """百度安全验证：必须显式报错，不能当成 0 命中。"""
+
+
+def _baidu_guard() -> None:
+    if time.time() < _BAIDU_BLOCK_UNTIL:
+        raise BaiduBlocked("百度安全验证冷却中，本轮跳过百度资讯")
+
+
+def _baidu_mark_blocked() -> None:
+    global _BAIDU_BLOCK_UNTIL
+    _BAIDU_BLOCK_UNTIL = time.time() + 1800
+
+
+def _baidu_throttle() -> None:
+    global _BAIDU_LAST
+    wait = _BAIDU_GAP - (time.time() - _BAIDU_LAST)
+    if wait > 0:
+        time.sleep(wait)
+    _BAIDU_LAST = time.time()
+
+
+def _baidu_clean(s: str) -> str:
+    t = re.sub(r"\s+", " ", _plain(s or "", 800)).strip()
+    # html_to_text 会把 <em>高亮</em> 拆成独立片段，中文之间不该留空格
+    return re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", t)
+
+
+def _baidu_time(s: str) -> str:
+    """百度资讯的 dispTime 是相对时间（3小时前 / 昨天 / 前天 / 5月22日），转 UTC ISO。"""
+    now = datetime.now(timezone(timedelta(hours=8)))
+    t = (s or "").strip()
+    m = re.search(r"(\d+)\s*分钟前", t)
+    if m:
+        dt = now - timedelta(minutes=int(m.group(1)))
+    elif (m := re.search(r"(\d+)\s*小时前", t)):
+        dt = now - timedelta(hours=int(m.group(1)))
+    elif (m := re.search(r"(\d+)\s*天前", t)):
+        dt = now - timedelta(days=int(m.group(1)))
+    elif t.startswith("昨天"):
+        dt = now - timedelta(days=1)
+    elif t.startswith("前天"):
+        dt = now - timedelta(days=2)
+    elif (m := re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", t)):
+        dt = now.replace(year=int(m.group(1)), month=int(m.group(2)),
+                         day=int(m.group(3)), hour=10, minute=0, second=0)
+    elif (m := re.search(r"(\d{1,2})月(\d{1,2})日", t)):
+        dt = now.replace(month=int(m.group(1)), day=int(m.group(2)),
+                         hour=10, minute=0, second=0)
+        if dt > now + timedelta(days=1):        # 跨年：未来日期算上一年
+            dt = dt.replace(year=now.year - 1)
+    else:
+        dt = now
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def fetch_baidu_news(keyword: str, pages: int = 1, days: int = 120,
+                     must_any: tuple = (), exclude: tuple = ()) -> list[dict]:
+    """百度资讯搜索 → 标准 entry。触发安全验证时抛错（不能当 0 命中）。"""
+    _baidu_guard()
+    out, seen = [], set()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, days))).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    for page in range(max(1, pages)):
+        _baidu_throttle()
+        url = ("https://www.baidu.com/s?"
+               + urllib.parse.urlencode({"tn": "news", "wd": keyword, "pn": page * 10}))
+        try:
+            raw = _get(url, timeout=20, accept="text/html").decode("utf-8", "ignore")
+        except Exception as e:
+            if out:
+                break
+            raise RuntimeError(f"百度资讯请求失败：{str(e)[:80]}") from e
+        if len(raw) < 20000 or "百度安全验证" in raw or "wappass.baidu.com" in raw:
+            _baidu_mark_blocked()
+            if out:
+                break
+            raise BaiduBlocked("百度安全验证：连续请求触发反爬，请稍后重试")
+        for m in re.finditer(r"<!--s-data:(\{.*?)-->", raw, re.S):
+            try:
+                d = json.loads(m.group(1))
+            except Exception:
+                continue
+            title = _baidu_clean(d.get("title") or "")
+            link = (d.get("titleUrl") or "").strip()
+            if not title or not link or link in seen:
+                continue
+            summary = _baidu_clean(d.get("summary") or "")
+            blob = f"{title} {summary}"
+            if must_any and not any(w in blob for w in must_any):
+                continue
+            if exclude and any(w in blob for w in exclude):
+                continue
+            t_valid = _baidu_time(d.get("dispTime") or "")
+            if t_valid < cutoff:
+                continue
+            seen.add(link)
+            src = _baidu_clean(d.get("sourceName") or "")
+            out.append({
+                "title": title,
+                "link": link,
+                "desc": f"{src}｜{summary}".strip("｜"),
+                "guid": f"baidu-{abs(hash(link)) % (10 ** 12)}",
+                "t_valid": t_valid,
+                "_source_name": f"百度资讯·{src}" if src else "百度资讯",
+            })
+        if not out:
+            break
+    return out
+
+
+_HOT_WORDS = None
+
+
+def entity_hit(text: str) -> bool:
+    """热搜/榜单一类的宽口径命中：AI 词 或 实体词表（含 Kimi/豆包/文心等别名）。"""
+    global _HOT_WORDS
+    t = text or ""
+    if _hit(t) or _known_ai(t):
+        return True
+    if _HOT_WORDS is None:
+        try:
+            import sources
+            words = set()
+            for group in ("智谱·唐杰", "竞对动态", "具身智能", "算力供应链"):
+                words.update(sources.ENTITIES.get(group) or [])
+            _HOT_WORDS = {w for w in words if len(w) >= 2}
+        except Exception:
+            _HOT_WORDS = set()
+    return any(w in t for w in _HOT_WORDS)
+
+
+def fetch_baidu_hot(limit: int = 20) -> list[dict]:
+    """百度热搜榜（无需登录）。只保留与 AI 产业链/竞对相关的条目，避免娱乐八卦灌库。"""
+    url = "https://top.baidu.com/api/board?platform=wise&tab=realtime"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA, "Accept": "application/json",
+        "Referer": "https://top.baidu.com/board?tab=realtime"})
+    with ratelimit.IO_GATE:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read().decode("utf-8", "ignore"))
+
+    items = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            if o.get("word"):
+                items.append(o)
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk((data.get("data") or {}).get("cards") or [])
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out, seen = [], set()
+    for it in items:
+        word = _baidu_clean(it.get("word") or "")
+        link = it.get("url") or ""
+        if not word or not link or word in seen:
+            continue
+        desc = _baidu_clean(it.get("desc") or "")
+        if not entity_hit(f"{word} {desc}"):
+            continue
+        seen.add(word)
+        out.append({
+            "title": f"[百度热搜] {word}",
+            "link": link,
+            "desc": desc,
+            "guid": f"baidu-hot-{abs(hash(word)) % (10 ** 12)}",
+            "t_valid": now,
+            "_source_name": "百度热搜",
+            "_no_fetch": True,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 def fetch_zhipu_news(limit: int = 60, days: int = 1500, pages: int = 4) -> list[dict]:
     """官网新闻列表。站点目前不接受 ?page=N（返回同一页），但保留多页探测：
     一旦官网以后支持翻页，这里会自动吃到更多条目；不支持时只跑一次，成本不变。"""

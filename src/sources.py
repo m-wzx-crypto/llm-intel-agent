@@ -49,6 +49,13 @@ SOURCES: list[dict[str, Any]] = [
      "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
      "group": "tech", "tier": 3, "filter": "ai_deal"},
 
+    # 百度：资讯搜索（关键词）+ 热搜榜（公开榜单，无需登录）
+    {"id": "baidu_news_zhipu", "name": "百度资讯·智谱", "kind": "api",
+     "url": "baidu:news:zhipu", "group": "business", "tier": 2},
+    {"id": "baidu_news_tangjie", "name": "百度资讯·唐杰", "kind": "api",
+     "url": "baidu:news:tangjie", "group": "business", "tier": 2},
+    {"id": "baidu_hot", "name": "百度热搜", "kind": "api",
+     "url": "baidu:hot", "group": "business", "tier": 3},
     # JSON API 型：给的是结构化事实（研报/公告/快讯），不是新闻
     {"id": "eastmoney_report", "name": "券商研报", "kind": "api", "url": "eastmoney:report",
      "group": "research", "tier": 1},
@@ -85,6 +92,11 @@ CONFIGURABLE = [
         "id": "xiaohongshu", "name": "小红书", "group": "social",
         "why": "直连需登录态与签名，有判例风险，默认关闭（技术方案 §9）",
         "how": "如需开启，走「客户本机扫码只读」或商业数据源对接",
+    },
+    {
+        "id": "weibo", "name": "微博", "group": "social",
+        "why": "关键词搜索必须登录；匿名只读接口已不可用（实测 432/403）",
+        "how": "信源页点「微博」卡片，用微博 App 扫码登录本机只读通道；登录态只存本机 Keychain",
     },
 ]
 

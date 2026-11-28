@@ -136,6 +136,15 @@ def _run_daily_impl(progress=None, slot: str = "morning") -> dict:
     except Exception:
         _xhs_status, st = None, None
 
+    # 微博本机只读通道：扫码登录后并入采集（未登录不占用探测位）
+    try:
+        import weibo as weibo_mod
+        if weibo_mod.get_mode() == "local" and weibo_mod.login_status().get("logged_in"):
+            all_sources.append({"id": "weibo_local", "name": "微博", "kind": "api",
+                                "url": "weibo:local", "group": "social", "tier": 2})
+    except Exception:
+        pass
+
     wx_block = wechat_guard.cooldown_status() if wx_urls else {"active": False}
     if wx_urls and not wx_block["active"]:
         all_sources.append({"id": "wechat_direct", "name": "公众号直链", "kind": "api",
@@ -180,6 +189,20 @@ def _run_daily_impl(progress=None, slot: str = "morning") -> dict:
                     elif src["url"] == "xhs:vendor":
                         import social
                         entries = social.fetch_vendor()
+                    elif src["url"] == "weibo:local":
+                        import weibo as weibo_mod
+                        entries = weibo_mod.fetch_login()
+                    elif src["url"] == "baidu:news:zhipu":
+                        entries = sources_api.fetch_baidu_news(
+                            "智谱", pages=1, days=120,
+                            must_any=("智谱", "GLM", "ChatGLM", "Zhipu"))
+                    elif src["url"] == "baidu:news:tangjie":
+                        entries = sources_api.fetch_baidu_news(
+                            "唐杰 智谱", pages=1, days=365,
+                            must_any=("唐杰", "智谱", "GLM"),
+                            exclude=("唐杰雄",))
+                    elif src["url"] == "baidu:hot":
+                        entries = sources_api.fetch_baidu_hot(limit=20)
                     elif src["url"] == "wechat:urls":
                         entries = sources_api.fetch_wechat_urls(wx_urls)
                     elif src["url"] == "eastmoney:report":
@@ -488,6 +511,8 @@ DEFAULT_CONFIG = {
             "https://mp.weixin.qq.com/s/L81hPMQ66ddC260HwgePXw",
         ],
         "xiaohongshu_mode": "off",   # off | local | vendor
+        "weibo_mode": "off",         # off | local（本机扫码登录后只读采集）
+        "weibo_keywords": ["智谱", "GLM", "唐杰", "DeepSeek", "Kimi", "豆包"],
         "wechat_cooldown_hours": 6,  # 公众号直链被限流后暂停多久再试
         # 三面板关键词：竞对也纳入同一轮采集；顺序即优先级
         "xiaohongshu_panels": {

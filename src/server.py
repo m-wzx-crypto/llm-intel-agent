@@ -447,6 +447,48 @@ class Handler(BaseHTTPRequestHandler):
             _json(self, social.login_qrcode())
             return
 
+        if p == "/api/weibo/status":
+            import weibo as weibo_mod
+            _json(self, {"mode": weibo_mod.get_mode(),
+                         "login": weibo_mod.login_status(),
+                         "probe": weibo_mod.probe(),
+                         "keywords": weibo_mod.keywords()})
+            return
+
+        if p == "/api/weibo/recent":
+            import weibo as weibo_mod
+            days = max(1, min(int(q.get("days", ["30"])[0]), 365))
+            limit = max(1, min(int(q.get("limit", ["30"])[0]), 100))
+            rows = []
+            try:
+                conn = db.connect()
+                try:
+                    rows = [dict(r) for r in conn.execute(
+                        "SELECT d.id, d.title, d.url, d.source_name, d.t_valid, d.content,"
+                        " i.id AS item_id FROM doc d LEFT JOIN item i ON i.doc_id=d.id"
+                        " WHERE d.source_id='weibo_local' AND d.dupe_of IS NULL"
+                        " AND d.t_valid >= strftime('%Y-%m-%dT%H:%M:%SZ','now',?)"
+                        " ORDER BY d.t_valid DESC LIMIT ?",
+                        (f"-{days} days", limit)).fetchall()]
+                finally:
+                    conn.close()
+            except Exception as e:
+                _json(self, {"items": [], "error": str(e)[:160],
+                             "mode": weibo_mod.get_mode(),
+                             "login": weibo_mod.login_status()})
+                return
+            _json(self, {"items": rows, "mode": weibo_mod.get_mode(),
+                         "login": weibo_mod.login_status()})
+            return
+
+        if p == "/api/weibo/qr":
+            import weibo as weibo_mod
+            try:
+                _json(self, weibo_mod.qr_start())
+            except Exception as e:
+                _json(self, {"error": str(e)[:160]}, 200)
+            return
+
         if p == "/api/entity":
             name = q.get("name", [""])[0]
             wd = int(q.get("days", ["30"])[0])
@@ -498,12 +540,27 @@ class Handler(BaseHTTPRequestHandler):
                              "group": "wechat", "tier": 1,
                              "status": pr.get("status", "configured"),
                              "hits": pr.get("hit_count", 0), "url": u})
+            wm = (cfg.get("channels") or {}).get("weibo_mode", "off")
+            wlogin = {}
+            if wm == "local":
+                try:
+                    import weibo as weibo_mod
+                    wlogin = weibo_mod.login_status()
+                except Exception:
+                    wlogin = {}
+                pr = probes.get("weibo_local", {})
+                srcs.append({"id": "weibo_local", "name": "微博", "group": "social", "tier": 2,
+                             "status": pr.get("status") or (
+                                 "ok" if wlogin.get("logged_in") else "need_login"),
+                             "hits": pr.get("hit_count", 0)})
             _json(self, {
                 "sources": srcs,
                 "wechat_feeds": feeds,
                 "wechat_presets": wechat_presets.catalog(feeds),
                 "wechat_articles": (cfg.get("channels") or {}).get("wechat_articles") or [],
                 "xiaohongshu_mode": (cfg.get("channels") or {}).get("xiaohongshu_mode", "off"),
+                "weibo_mode": wm,
+                "weibo_login": wlogin,
                 "configurable": SRC.CONFIGURABLE,
             })
             return
@@ -774,6 +831,31 @@ class Handler(BaseHTTPRequestHandler):
             import xhs_sidecar
             xhs_sidecar.stop()
             _json(self, {"ok": True, "mode": mode})
+            return
+
+        if u.path == "/api/weibo/qr/poll":
+            import weibo as weibo_mod
+            _json(self, weibo_mod.qr_poll((payload.get("qrid") or "").strip()))
+            return
+
+        if u.path == "/api/weibo/mode":
+            mode = (payload.get("mode") or "").strip()
+            if mode not in ("off", "local"):
+                _json(self, {"ok": False, "msg": "mode 只支持 off/local"}, 400)
+                return
+            cfg = pipeline.load_config()
+            cfg.setdefault("channels", {})["weibo_mode"] = mode
+            pipeline.save_config(cfg)
+            if mode == "off":
+                import weibo as weibo_mod
+                weibo_mod.clear_cookies()
+            _json(self, {"ok": True, "mode": mode})
+            return
+
+        if u.path == "/api/weibo/logout":
+            import weibo as weibo_mod
+            weibo_mod.clear_cookies()
+            _json(self, {"ok": True})
             return
 
         if u.path == "/api/config":

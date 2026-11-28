@@ -285,7 +285,12 @@ def build_zhipu(window=30, q: str | None = None) -> dict:
         days = _days(window)
         idx = {d: i for i, d in enumerate(days)}
         media, tangjie, first = [0] * window, [0] * window, [0] * window
+        weibo = [0] * window
         pol = {"pos": 0, "neu": 0, "neg": 0, "market": 0}
+        plat_names = {"media": "媒体", "weibo": "微博", "wechat": "公众号",
+                      "xhs": "小红书", "baidu": "百度"}
+        plat = {k: {"n": 0, "pos": 0, "neg": 0} for k in plat_names}
+        wb_pol = {"pos": 0, "neu": 0, "neg": 0, "market": 0}
         items, market_items = [], []
         for r in rows:
             title = r["title"] or ""
@@ -307,8 +312,23 @@ def build_zhipu(window=30, q: str | None = None) -> dict:
                     tangjie[i] += 1
                 if official:
                     first[i] += 1
+                if (r["source_id"] or "").startswith("weibo"):
+                    weibo[i] += 1
             p = _polarity(title)
             pol[p] += 1
+            sid = (r["source_id"] or "")
+            pk = ("weibo" if sid.startswith("weibo") else
+                  "wechat" if ("wechat" in sid or sid.startswith("gzh")) else
+                  "xhs" if sid.startswith("xhs") else
+                  "baidu" if sid.startswith("baidu") else "media")
+            if p != "market":          # 平台分布只算计入态度条的条目，与上方总数对齐
+                plat[pk]["n"] += 1
+                if p == "neg":
+                    plat[pk]["neg"] += 1
+                elif p == "pos":
+                    plat[pk]["pos"] += 1
+            if pk == "weibo":
+                wb_pol[p] += 1
             x = {
                 "id": r["id"], "title": title, "t": (r["t_valid"] or "")[:10],
                 "source": r["source_name"] or "", "url": r["url"] or "",
@@ -335,10 +355,17 @@ def build_zhipu(window=30, q: str | None = None) -> dict:
         return {
             "subject": "智谱·唐杰", "window_days": window, "days": days,
             "media": media, "tangjie": tangjie, "first_hand": first,
+            # 综合 = 全网匹配条目（媒体/微博/公众号/小红书都算）；weibo 是其中的单列
+            "composite": media, "weibo": weibo,
             "counts": {"media": sum(media), "tangjie": sum(tangjie),
                        "first_hand": len(first_items), "items": total_items,
+                       "weibo": sum(weibo),
                        "market": len(market_items), "sources": len(src)},
             "polarity": dict(pol, note="标题词典判定，只作趋势参考"),
+            "platforms": [{"key": k, "name": plat_names[k], **plat[k]}
+                          for k in plat_names if plat[k]["n"]],
+            "pol_total": sum(plat[k]["n"] for k in plat_names),
+            "weibo_pol": wb_pol,
             "items": items[:80] + market_items[:10],
             "first_items": first_items,
             "sources": [{"name": k, "n": v} for k, v in

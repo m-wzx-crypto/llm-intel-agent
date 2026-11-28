@@ -620,11 +620,12 @@
         <div class="kpis" id="zp-kpis"></div>
         <div class="grid">
           <div class="card w2">
-            <div class="ch"><h3>报道 / 唐杰 / 一手发言</h3><span class="tag" id="zp-win">近 30 天</span>
+            <div class="ch"><h3>综合舆情 / 微博 / 唐杰 / 一手</h3><span class="tag" id="zp-win">近 30 天</span>
               <div class="sp"></div>
-              <div class="legend"><span><i style="background:#4f46e5"></i>媒体报道</span>
-                <span><i style="background:#f59e0b"></i>唐杰提及</span>
-                <span><i style="background:#10b981"></i>官网发布</span></div></div>
+              <div class="legend"><span><i style="background:#4f46e5"></i>综合</span>
+                <span><i style="background:#f97316"></i>微博</span>
+                <span><i style="background:#f59e0b"></i>唐杰</span>
+                <span><i style="background:#10b981"></i>官网</span></div></div>
             <div class="cb" style="min-height:190px"><div class="track" id="zp-track"></div></div>
           </div>
           <div class="card w2">
@@ -644,6 +645,11 @@
               </select>
               <span class="evi" id="zp-xhs-n">—</span></div>
             <div style="overflow:auto;max-height:420px" id="zp-xhs"></div>
+          </div>
+          <div class="card w2">
+            <div class="ch"><h3>微博风向 · 智谱/唐杰</h3>
+              <div class="sp"></div><span class="evi" id="zp-wb-n">—</span></div>
+            <div style="overflow:auto;max-height:420px" id="zp-wb"></div>
           </div>
           <div class="card w2">
             <div class="ch"><h3>一手发言 / 官方发布</h3>
@@ -716,7 +722,7 @@
       <section class="page" id="page-sources">
         <div class="ptitle"><h1>信源</h1></div>
 
-        <div class="grid" style="grid-template-columns:repeat(4,1fr);gap:12px" id="chan-cards"></div>
+        <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px" id="chan-cards"></div>
 
         <div class="card" style="margin-top:12px">
           <div class="ch"><h3>公众号 RSS 订阅</h3>
@@ -955,6 +961,14 @@ https://mp.weixin.qq.com/s/xxxxxxxx"
     <div class="mhead"><h2>接入小红书评论区</h2><div class="sp"></div>
       <button class="btn gh" id="xm-close">关闭</button></div>
     <div class="mbody" id="xm-body"></div>
+  </div>
+</div>
+
+<div class="modal" id="weibo-modal">
+  <div class="mbox" style="width:560px;max-width:94vw">
+    <div class="mhead"><h2>接入微博</h2><div class="sp"></div>
+      <button class="btn gh" id="wm-close">关闭</button></div>
+    <div class="mbody" id="wm-body"></div>
   </div>
 </div>
 
@@ -1987,6 +2001,97 @@ async function paintLocal(s0){
   document.addEventListener('keydown',e=>{ if(e.key==='Escape') m.classList.remove('on'); });
 })();
 
+/* ── 微博：扫码登录 + 只读采集 ── */
+let WB_POLL=null, WB_QRID=null;
+function wbStopPoll(){ if(WB_POLL){ clearInterval(WB_POLL); WB_POLL=null; } }
+(function bindWeiboModal(){
+  const m=document.getElementById('weibo-modal');
+  if(!m) return;
+  document.getElementById('wm-close').onclick=()=>{ wbStopPoll(); m.classList.remove('on'); };
+  m.addEventListener('click',e=>{ if(e.target===m){ wbStopPoll(); m.classList.remove('on'); } });
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ wbStopPoll(); m.classList.remove('on'); } });
+})();
+
+function paintWeiboLogged(st){
+  const body=$('#wm-body'); if(!body) return;
+  const uid=(st.login||{}).uid||'—';
+  const on=st.mode==='local';
+  body.innerHTML=`
+    <div style="font-size:11.5px;color:#475569;line-height:1.7">
+      <div style="font-weight:680;color:#0f172a;font-size:12.5px;margin-bottom:4px">微博已登录</div>
+      <div>UID：<b>${esc(String(uid))}</b></div>
+      <div>检索关键词：${((st.keywords||[]).map(esc).join('、'))||'—'}</div>
+      <div style="margin-top:6px;color:${on?'#94a3b8':'#b45309'}">
+        ${on?'下次采集自动并入；登录态只存本机 Keychain。':'通道当前未开启，开启后下次采集才会并入。'}</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        ${on?'':'<button class="btn pri" id="wm-enable">开启通道</button>'}
+        <button class="btn gh" id="wm-logout">退出登录</button>
+        <button class="btn gh" id="wm-close2">关闭</button>
+      </div>
+    </div>`;
+  const eb=$('#wm-enable');
+  if(eb) eb.onclick=async()=>{
+    try{ await fetch('/api/weibo/mode',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode:'local'})}); }catch(e){}
+    await loadChannels(); openWeiboModal();
+  };
+  $('#wm-logout').onclick=async()=>{
+    try{ await fetch('/api/weibo/logout',{method:'POST'}); }catch(e){}
+    await loadChannels(); openWeiboModal();
+  };
+  $('#wm-close2').onclick=()=>{ const m=$('#weibo-modal'); if(m) m.classList.remove('on'); };
+}
+
+async function openWeiboModal(){
+  const m=$('#weibo-modal'); if(!m) return;
+  m.classList.add('on'); wbStopPoll();
+  const body=$('#wm-body');
+  body.innerHTML='<div class="empty"><b>正在获取微博通道状态…</b></div>';
+  let st=null; try{ st=await apiGet('/api/weibo/status'); }catch(e){}
+  if(!st||st.error){ body.innerHTML='<div class="empty"><b>无法获取微博通道状态</b></div>'; return; }
+  if(st.login&&st.login.logged_in){ paintWeiboLogged(st); return; }
+
+  let qr=null; try{ qr=await apiGet('/api/weibo/qr'); }catch(e){}
+  if(!qr||qr.error||!qr.scan_url){
+    body.innerHTML=`<div class="empty"><b>二维码获取失败</b>
+      <span style="font-size:11px;color:#94a3b8">${esc((qr&&qr.error)||'网络异常，请稍后重试')}</span></div>`;
+    return;
+  }
+  WB_QRID=qr.qrid;
+  body.innerHTML=`
+    <div style="display:flex;gap:16px;align-items:flex-start">
+      <div style="width:168px;height:168px;border:1px solid #eef2f8;border-radius:12px;background:#fff;
+                  display:flex;align-items:center;justify-content:center;flex:none;overflow:hidden">
+        <img alt="登录二维码" src="/api/qr?text=${encodeURIComponent(qr.scan_url)}" style="width:156px;height:156px">
+      </div>
+      <div style="font-size:11.5px;color:#475569;line-height:1.7">
+        <div style="font-weight:680;color:#0f172a;font-size:12.5px;margin-bottom:4px">用微博 App 扫码登录</div>
+        <div>登录态只存本机（系统 Keychain），不会上传。</div>
+        <div style="margin-top:6px;color:#b45309">关键词搜索必须登录；请使用本人账号，风险自担。</div>
+        <div id="wm-state" style="margin-top:8px;color:#94a3b8">等待扫码…</div>
+        <button class="btn gh" id="wm-refresh" style="margin-top:8px">刷新二维码</button>
+      </div>
+    </div>`;
+  $('#wm-refresh').onclick=openWeiboModal;
+  wbStopPoll();
+  WB_POLL=setInterval(async()=>{
+    let r=null;
+    try{
+      r=await fetch('/api/weibo/qr/poll',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({qrid:WB_QRID})}).then(x=>x.json());
+    }catch(e){ return; }
+    const s=$('#wm-state'); if(s&&r&&(r.msg||r.state)) s.textContent=r.msg||r.state;
+    if(r&&r.state==='ok'){
+      wbStopPoll();
+      try{ await fetch('/api/weibo/mode',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({mode:'local'})}); }catch(e){}
+      await loadChannels(); openWeiboModal();
+    }
+    if(r&&(r.state==='expired'||r.state==='error')){ wbStopPoll(); }
+  },2000);
+}
+
+
 function renderXhs(s){
   const box=$('#zp-xhs'), ev=$('#zp-xhs-n');
   XHS_STATE=s||null;
@@ -2046,12 +2151,14 @@ document.addEventListener('change',e=>{
 });
 
 async function loadZhipu(){
-  const [d,s]=await Promise.all([
+  const [d,s,w]=await Promise.all([
     apiGet(`/api/zhipu?days=${DAYS}${FILTER?`&q=${encodeURIComponent(FILTER)}`:""}`),
     apiGet(`/api/social?days=${DAYS}&panel=${xhsPanel()}${FILTER?`&q=${encodeURIComponent(FILTER)}`:""}`),
+    apiGet(`/api/weibo/recent?days=${DAYS}&limit=30`),
   ]);
   if(!d||d.error) return;
   renderXhs(s);
+  renderWeibo(w,d);
   const c=d.counts||{}, p=d.polarity||{}, days=d.days||[];
   const nonMarket=(p.pos||0)+(p.neu||0)+(p.neg||0);
   const pct=(a,b)=>b?Math.round(a/b*100):0;
@@ -2062,23 +2169,24 @@ async function loadZhipu(){
     <div class="d">${foot}</div></div>`;
   $('#zp-win').textContent=`近 ${d.window_days} 天`;
   $('#zp-kpis').innerHTML =
-    card("媒体报道", c.media||0, `${c.sources||0} 个信源`, "#4f46e5")
+    card("全网提及", c.media||0, `${c.sources||0} 个信源 · 微博 ${c.weibo||0}`, "#4f46e5")
     + card("唐杰提及", c.tangjie||0, "", "#f59e0b")
     + card("官网一手发布", c.first_hand||0, "", "#10b981")
     + card("态度", `${pct(p.pos||0,nonMarket)}% / ${pct(p.neg||0,nonMarket)}%`,
            `正 / 负 · 行情 ${p.market||0} 条`, "#64748b");
   const ev=$('#zp-evi');
   if(ev){ ev.className="evi "+(c.media?"ok":"none");
-    ev.textContent=`媒体 ${c.media||0} · 一手 ${c.first_hand||0}`; }
+    ev.textContent=`综合 ${c.media||0} · 微博 ${c.weibo||0}`; }
 
-  // 三条走势：媒体 / 唐杰 / 官网
+  // 四条走势：综合（全网）/ 微博 / 唐杰 / 官网
   const box=$('#zp-track'), n=days.length;
   if(!n){ box.innerHTML='<div class="empty"><b>窗口内无数据</b></div>'; }
   else{
     const series=[
-      ["媒体报道", d.media||[], "#4f46e5", "智谱"],
-      ["唐杰提及", d.tangjie||[], "#f59e0b", "唐杰"],
-      ["官网发布", d.first_hand||[], "#10b981", "智谱"],
+      ["综合", d.composite||d.media||[], "#4f46e5", "智谱"],
+      ["微博", d.weibo||[], "#f97316", "智谱"],
+      ["唐杰", d.tangjie||[], "#f59e0b", "唐杰"],
+      ["官网", d.first_hand||[], "#10b981", "智谱"],
     ];
     const ticks=[0,Math.floor(n/2),n-1];
     const cols=n>30?`repeat(${n},8px)`:`repeat(${n},1fr)`;
@@ -2110,13 +2218,18 @@ async function loadZhipu(){
   // 标题态度
   const seg=(v,col,label)=>v?`<div style="flex:${v};background:${col}" title="${label} ${v}"></div>`:"";
   $('#zp-pol').innerHTML=`
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">
+      <b style="font-size:12.5px">综合舆情 · ${nonMarket} 条</b>
+      <span style="font-size:10.5px;color:#94a3b8">全平台（含微博）标题态度</span></div>
     <div style="display:flex;height:10px;border-radius:6px;overflow:hidden;background:#eef2f7">
       ${seg(p.pos||0,"#10b981","正面")}${seg(p.neu||0,"#cbd5e1","中性")}${seg(p.neg||0,"#ef4444","负面")}</div>
     <div style="display:flex;justify-content:space-between;margin-top:9px;font-size:11px;color:#64748b">
       <span>正面 ${p.pos||0}</span><span>中性 ${p.neu||0}</span><span>负面 ${p.neg||0}</span></div>
-    <div style="margin-top:10px;font-size:10.5px;color:#94a3b8;line-height:1.55">${esc(p.note||"")}</div>
-    <div style="margin-top:6px;font-size:10.5px;color:#94a3b8">行情 ${p.market||0} 条未计入</div>
-    <div style="margin-top:10px;font-size:10.5px;color:#94a3b8">${esc((d.sources||[]).slice(0,4)
+    <div style="margin-top:9px;display:flex;flex-wrap:wrap;gap:6px">
+      ${(d.platforms||[]).map(x=>`<span class="chip flat" title="正 ${x.pos} / 负 ${x.neg}">${x.name} ${x.n}</span>`).join("")
+        ||'<span style="font-size:10.5px;color:#94a3b8">窗口内无相关条目</span>'}</div>
+    <div style="margin-top:8px;font-size:10.5px;color:#94a3b8;line-height:1.55">${esc(p.note||"")} · 行情 ${p.market||0} 条未计入</div>
+    <div style="margin-top:4px;font-size:10.5px;color:#94a3b8">信源 Top4：${esc((d.sources||[]).slice(0,4)
       .map(s=>s.name+" "+s.n).join(" · ")||"窗口内无相关报道")}</div>`;
 
   // 列表
@@ -2148,11 +2261,58 @@ async function loadZhipu(){
   $('#zp-items-n').textContent=`n=${nItems}`;
 }
 
+/* ── 微博风向（智谱页） ── */
+function renderWeibo(w, d){
+  const box=$('#zp-wb'), ev=$('#zp-wb-n');
+  if(!box||!ev) return;
+  const login=!!((w||{}).login||{}).logged_in;
+  const items=(w&&w.items)||[];
+  ev.className="evi "+(login?(items.length?"ok":"weak"):"none");
+  ev.textContent=login?(items.length?`n=${items.length}`:"已登录 · 待采集"):"未登录";
+  if(!login){
+    box.innerHTML=`<div class="empty"><b>微博未登录</b>
+      <span>登录后采集智谱/唐杰关键词与热搜</span>
+      <button class="btn" id="zp-wb-login" style="margin-top:10px">扫码登录</button></div>`;
+    const b=$('#zp-wb-login'); if(b) b.onclick=openWeiboModal;
+    return;
+  }
+  if(!items.length){
+    box.innerHTML=`<div class="empty"><b>已登录，暂无入库微博</b>
+      <span>点「任务 → 采集一次」后，这里会出现智谱/唐杰相关微博</span></div>`;
+    return;
+  }
+  const wp=((d||{}).weibo_pol)||{}, seg=(v,col,label)=>
+    v?`<div style="flex:${v};background:${col}" title="${label} ${v}"></div>`:"";
+  const wbTotal=(wp.pos||0)+(wp.neu||0)+(wp.neg||0);
+  const head=`<div style="padding:10px 16px 0;font-size:11px;color:#64748b">
+      微博态度 · 样本 ${wbTotal} 条 · 窗口内 ${items.length} 条</div>
+    <div style="margin:8px 16px 0;display:flex;height:10px;border-radius:6px;overflow:hidden;background:#eef2f7">
+      ${seg(wp.pos||0,"#10b981","正面")}${seg(wp.neu||0,"#cbd5e1","中性")}${seg(wp.neg||0,"#ef4444","负面")}</div>
+    <div style="display:flex;justify-content:space-between;margin:7px 16px 0;font-size:11px;color:#64748b">
+      <span>正 ${wp.pos||0}</span><span>中 ${wp.neu||0}</span><span>负 ${wp.neg||0}</span>
+      <span>行情 ${wp.market||0} 条未计入</span></div>
+    <div style="margin:8px 16px 0;font-size:10.5px;color:#94a3b8">标题词典判定，与上方综合舆情同一口径</div>`;
+  box.innerHTML=head+items.map(x=>{
+    const txt=String(x.content||x.title||'').replace(/\s+/g,' ').slice(0,120);
+    return `<div class="zpitem" data-iid="${x.item_id||''}"
+       style="padding:8px 16px;border-top:1px solid #f3f6fa;cursor:pointer">
+      <div style="font-size:12px;color:#334155;line-height:1.5">${esc(txt)}</div>
+      <div style="display:flex;gap:8px;margin-top:3px;font-size:10px;color:#94a3b8">
+        <span>${(x.t_valid||'').slice(5,16).replace('T',' ')}</span>
+        <span>${esc(x.source_name||'微博')}</span></div>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('.zpitem').forEach(el=>{
+    el.onclick=()=>{ const iid=+el.dataset.iid; if(iid) openDetail(iid); };
+  });
+}
+
 /* ── 信源 ── */
 const CHAN_META={
   zhipu:{name:"智谱专题"},
   wechat:{name:"公众号"},
   social:{name:"小红书"},
+  weibo:{name:"微博"},
   research:{name:"研报 / 竞对"},
 };
 let WX_FEEDS=[];
@@ -2194,13 +2354,17 @@ async function loadChannels(){
      hint:(nFeed+nLink)>0?`已接入：${(byGroup.wechat||[]).slice(0,3).map(s=>s.name).join("、")||"—"}`:null},
     {key:"social", ok:d.xiaohongshu_mode==="local"||d.xiaohongshu_mode==="vendor",
      val:d.xiaohongshu_mode==="off"?"未开启":d.xiaohongshu_mode==="local"?"本地只读":"商业数据源", hint:null},
+    {key:"weibo", ok:d.weibo_mode==="local"&&!!(d.weibo_login||{}).logged_in,
+     val:d.weibo_mode!=="local"?"未开启":((d.weibo_login||{}).logged_in?"已登录":"待扫码"),
+     hint:d.weibo_mode==="local"&&(d.weibo_login||{}).logged_in
+       ?`UID ${(d.weibo_login||{}).uid||'—'}`:"点击卡片扫码接入"},
     {key:"research", ok:nRes>0,
      val:`${nRes} 个源`,
      hint:nRes>0?`已接入：${[...(byGroup.research||[]),...(byGroup.competitor||[])].slice(0,3).map(s=>s.name).join("、")} 等`:null},
   ];
   $("#chan-cards").innerHTML=cards.map(c=>{
     const m=CHAN_META[c.key];
-    return `<div class="card" style="padding:14px 16px">
+    return `<div class="card" data-chan="${c.key}" style="padding:14px 16px;cursor:pointer">
       <div style="display:flex;align-items:center;gap:7px;margin-bottom:7px">
         <span style="width:7px;height:7px;border-radius:50%;background:${c.ok?'#10b981':'#cbd5e1'}"></span>
         <b style="font-size:13px">${m.name}</b>
@@ -2211,6 +2375,13 @@ async function loadChannels(){
       ${c.hint?`<div style="font-size:10.5px;color:#4f46e5;line-height:1.6;margin-top:3px">${esc(c.hint)}</div>`:""}
     </div>`;
   }).join("");
+  document.querySelectorAll('#chan-cards .card[data-chan]').forEach(el=>{
+    el.onclick=()=>{
+      const k=el.dataset.chan;
+      if(k==='weibo') openWeiboModal();
+      else if(k==='social') openXhsModal();
+    };
+  });
 
   WX_FEEDS=(d.wechat_feeds||[]).slice();
   renderWxPresets(d.wechat_presets||[]);
@@ -2221,6 +2392,7 @@ async function loadChannels(){
 
   const ST={ok:["正常","#10b981"],zero_hit:["零命中","#f59e0b"],unavailable:["不可用","#ef4444"],
             parse_broken:["解析失败","#ef4444"],rate_limited:["限流冷却","#f59e0b"],
+            need_login:["待扫码","#f59e0b"],
             not_run:["未运行","#94a3b8"],configured:["已配置","#4f46e5"]};
   $("#src-count").textContent=`${srcs.length} 个`;
   $("#src-list").innerHTML=`<div class="srow hd"><span>信源</span><span>分组</span><span>状态</span><span>条数</span></div>`
